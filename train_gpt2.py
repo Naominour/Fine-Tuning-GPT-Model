@@ -6,6 +6,12 @@ import torch.nn as nn
 
 #-----------------------------------------------------------
 
+class MLP(self, config):
+    super().__init__()
+    
+
+
+
 class Block(nn.Module):
 
     def __init__(self, config):
