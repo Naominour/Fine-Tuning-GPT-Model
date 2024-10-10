@@ -17,7 +17,7 @@ class MLP(nn.Module):
     def forward(self, x):
         x = self.c_fc(x)
         x = self.gelu(x)
-        x = self.c_proj
+        x = self.c_proj(x)
         return x
 
 # Attention block function
