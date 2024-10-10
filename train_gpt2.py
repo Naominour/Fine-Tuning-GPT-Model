@@ -126,5 +126,9 @@ def from_pretrained(cls, model_type):
             assert sd_hf[k].shape == sd[k].shape
             with torch.no_grad():
                 sd[k].copy_(sd_hf[k])
-                
+
     return model
+
+#------------------------------------------------------------------------------------
+model = GPT.from_pretrained('gpt2')
+print("The program did't crash!")
