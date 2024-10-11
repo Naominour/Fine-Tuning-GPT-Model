@@ -13,26 +13,28 @@ def csv_to_txt(df):
         text_data += f"Question: {question}\nAnswer: {answer}\n\n"
     return text_data
 
-# Initialize an empty string to hold all text data
-all_data_txt = ""
+def data():
+    # Initialize an empty string to hold all text data
+    all_data_txt = ""
+    # Loop through all files in the directory
+    for filename in os.listdir(files_directory):
+        if filename.endswith(".csv"):  # Process only CSV files
+            filepath = os.path.join(files_directory, filename)
+            df = pd.read_csv(filepath)
+            df = df[['Question', 'Answer']]  # Corrected column name
+            all_data_txt += csv_to_txt(df)
 
-# Loop through all files in the directory
-for filename in os.listdir(files_directory):
-    if filename.endswith(".csv"):  # Process only CSV files
-        filepath = os.path.join(files_directory, filename)
-        df = pd.read_csv(filepath)
-        df = df[['Question', 'Answer']]  # Corrected column name
-        all_data_txt += csv_to_txt(df)
+    # Specify the output directory and file path
+    output_dir = r'G:\My Drive\Medical_LLM\output_data'
+    output_txt_path = os.path.join(output_dir, 'Medical_QA_Dataset.txt')
 
-# Specify the output directory and file path
-output_dir = r'G:\My Drive\Medical_LLM\output_data'
-output_txt_path = os.path.join(output_dir, 'Medical_QA_Dataset.txt')
+    # Ensure the output directory exists, create it if it doesn't
+    os.makedirs(output_dir, exist_ok=True)  
 
-# Ensure the output directory exists, create it if it doesn't
-os.makedirs(output_dir, exist_ok=True)  
+    # Write the concatenated text data to a .txt file using utf-8 encoding
+    with open(output_txt_path, "w", encoding="utf-8") as text_file:
+        text_file.write(all_data_txt)
+    print("Text file has been successfully generated!")
 
-# Write the concatenated text data to a .txt file using utf-8 encoding
-with open(output_txt_path, "w", encoding="utf-8") as text_file:
-    text_file.write(all_data_txt)
+    return all_data_txt, output_txt_path
 
-print("Text file has been successfully generated!")

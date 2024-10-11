@@ -161,7 +161,7 @@ max_length = 30
 
 model = GPT.from_pretrained('gpt2')
 model.eval()
-model.to('cuda')
+model.to(device)
 
 
 # prefix tokens
@@ -170,7 +170,7 @@ enc = tiktoken.get_encoding('gpt2')
 tokens = enc.encode("Hello, I'm a language model,")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
-x = tokens.to('cuda')
+x = tokens.to(device)
 
 torch.manual_seed(42)
 torch.cuda.manual_seed(42)
