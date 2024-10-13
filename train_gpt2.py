@@ -89,7 +89,7 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
@@ -103,7 +103,10 @@ class GPT(nn.Module):
 
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1), targets.view(-1)))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -156,17 +159,34 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
 
-num_return_sequences = 5
-max_length = 30
+
 
 model = GPT.from_pretrained('gpt2')
-model.eval()
-model.to(device)
 
-
-# prefix tokens
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
+data_path = 'G:/My Drive/Medical_LLM/output_data/Medical_QA_Dataset.txt'
+with open(data_path, 'r', encoding='utf-8') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
+
+# get logits
+model = GPT(GPTConfig())
+model.to(device)
+logits, loss = model(x, y)
+
+print(loss)
+import sys; sys.exit(0)
+
+# prefix tokens
+model.eval()
+num_return_sequences = 5
+max_length = 30
 tokens = enc.encode("Hello, I'm a language model,")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
