@@ -242,6 +242,14 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
+total_batch_size = 524288 
+B = 16 # micro batch size
+T = 1024
+assert total_batch_size % (B * T) == 0
+grad_accum_steps = total_batch_size // (B * T)
+print(f"total desired batch size: {total_batch_size}")
+print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+
 train_loader = DataLoaderLite(B=16, T=1024)
 # check whether the gpu has TF32
 torch.set_float32_matmul_precision('high')
@@ -268,16 +276,17 @@ def get_lr(it):
 
 
 # optimize:
-#optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, .95), eps=1e-8)
 optimizer = model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device=device
                                          )
 for step in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
+    for micro_step in grad_accum_steps:
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
     with torch.autocast(device_type=device, dtype=torch.bfloat16):
         logits, loss = model(x, y)
+    loss = loss / grad_accum_steps
     loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step)
