@@ -281,12 +281,14 @@ optimizer = model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, d
 for step in range(max_steps):
     t0 = time.time()
     optimizer.zero_grad()
+    loss_accum = 0.0
     for micro_step in grad_accum_steps:
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
     with torch.autocast(device_type=device, dtype=torch.bfloat16):
         logits, loss = model(x, y)
     loss = loss / grad_accum_steps
+    loss_accum += loss.detach()
     loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step)
@@ -296,8 +298,9 @@ for step in range(max_steps):
     torch.cuda.synchronize() # waiting for gpu to stop iteration
     t1 = time.time()
     dt = (t1 - t0)*1000 # time difference in miliseconds
-    tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f"step {i:4d} | loss: {loss.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
+    tokens_per_sec = tokens_processed / dt
+    print(f"step {i:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
 import sys; sys.exit(0)
 
