@@ -247,7 +247,7 @@ def get_lr(it):
 
 # optimize:
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, .95), eps=1e-8)
-for i in range(max_steps):
+for step in range(max_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
@@ -264,7 +264,7 @@ for i in range(max_steps):
     t1 = time.time()
     dt = (t1 - t0)*1000 # time difference in miliseconds
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f"step {i:4d} | loss: {loss.item():.6f} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
+    print(f"step {i:4d} | loss: {loss.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
 import sys; sys.exit(0)
 
