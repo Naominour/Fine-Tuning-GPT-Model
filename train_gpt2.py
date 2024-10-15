@@ -219,11 +219,15 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
-
 train_loader = DataLoaderLite(B=16, T=1024)
+# check whether the gpu has TF32
+torch.set_float32_matmul_precision('high')
+
+
 # get logits
 model = GPT(GPTConfig())
 model.to(device)
+model = torch.compile(model)
 
 # optimize:
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
@@ -232,7 +236,8 @@ for i in range(50):
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
     loss.backward()
     optimizer.step()
     torch.cuda.synchronize() # waiting for gpu to stop iteration
