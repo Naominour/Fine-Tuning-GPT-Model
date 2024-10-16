@@ -1,11 +1,17 @@
+from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 from dataclasses import dataclass
 from torch.nn import functional as F
+from datasets import load_dataset
+from tqdm import tqdm
+
+import torch.distributed as dist
 import inspect
 import time
 import torch
 import math
 import torch.nn as nn
-
+import os 
 
 #-----------------------------------------------------------
 # Multi-Head attention function
@@ -231,8 +237,7 @@ class DataLoaderLite:
 
         
 #------------------------------------------------------------------------------------
-from torch.distributed import init_process_group, destroy_process_group
-import os 
+
 
 ddp = int(os.environ.get('RANK', -1)) != -1
 if ddp:
@@ -281,10 +286,13 @@ train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp
 torch.set_float32_matmul_precision('high')
 
 
-# get logits
+# creat model
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model = torch.compile(model)
+if ddp:
+    model = DDP(model, device_ids=[ddp_local_rank])
+raw_model = model.module if ddp else model
 
 max_lr = 3e-4
 min_lr = max_lr * 0.1
@@ -302,20 +310,25 @@ def get_lr(it):
 
 
 # optimize:
-optimizer = model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device=device
-                                         )
+optimizer = raw_model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device=device)
+
 for step in range(max_steps):
     t0 = time.time()
     optimizer.zero_grad()
     loss_accum = 0.0
-    for micro_step in grad_accum_steps:
+    for micro_step in range(grad_accum_steps):
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        logits, loss = model(x, y)
-    loss = loss / grad_accum_steps
-    loss_accum += loss.detach()
-    loss.backward()
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+        loss = loss / grad_accum_steps
+        loss_accum += loss.detach()
+        if ddp:
+            model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
+        loss.backward()
+    if ddp:
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
@@ -326,7 +339,11 @@ for step in range(max_steps):
     dt = (t1 - t0)*1000 # time difference in miliseconds
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
     tokens_per_sec = tokens_processed / dt
-    print(f"step {i:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
+    if master_process:
+        print(f"step {step:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
+
+if ddp:
+    destroy_process_group()
 
 import sys; sys.exit(0)
 
