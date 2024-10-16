@@ -234,9 +234,9 @@ import os
 
 ddp = int(os.environ.get('RANK', -1)) != -1
 if ddp:
-    asser torch.cuda.is_available()
+    assert torch.cuda.is_available()
     init_process_group(backend='nccl')
-    ddp_rank = init(os.environ['RANK'])
+    ddp_rank = int(os.environ['RANK'])
     ddp_local_rank = int(os.environ['LOCAL_RANK'])
     ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
@@ -265,13 +265,17 @@ if torch.cuda.is_available():
 total_batch_size = 524288 
 B = 16 # micro batch size
 T = 1024
-assert total_batch_size % (B * T) == 0
-grad_accum_steps = total_batch_size // (B * T)
-print(f"total desired batch size: {total_batch_size}")
-print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+assert total_batch_size % (B * T * ddp_world_size) == 0
+grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
+if master_process:
+    print(f"total desired batch size: {total_batch_size}")
+    print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+
+print("I am GPU", ddp_rank)
+import sys; sys.exit(0)
 
 train_loader = DataLoaderLite(B=16, T=1024)
-# check whether the gpu has TF32
+
 torch.set_float32_matmul_precision('high')
 
 
