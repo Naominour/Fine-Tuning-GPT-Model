@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from torch.nn import functional as F
+import inspect
+import time
 import torch
 import math
 import torch.nn as nn
@@ -227,16 +229,34 @@ class DataLoaderLite:
 
         
 #------------------------------------------------------------------------------------
-import time
+from torch.distributed import init_process_group, destroy_process_group
+import os 
 
-device = "cpu"
-if torch.cuda.is_available():
-    device = "cuda"
-elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    device = "mps"
-print(f"using device: {device}")
+ddp = int(os.environ.get('RANK', -1)) != -1
+if ddp:
+    asser torch.cuda.is_available()
+    init_process_group(backend='nccl')
+    ddp_rank = init(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    device = f'cuda:{ddp_local_rank}'
+    torch.cuda.set_device(device)
+    master_process = ddp_rank == 0
+else:
+     # vanilla, non-DDP run
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+    # attempt to autodetect device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    print(f"using device: {device}")
 
-device_type = "cuda" if device.startswith("cuda") else "cpu"
+device_type = "cuda" if device.startswith("cuda") else "cpu"   
 
 torch.manual_seed(1337)
 if torch.cuda.is_available():
