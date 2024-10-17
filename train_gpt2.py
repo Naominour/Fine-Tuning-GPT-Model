@@ -6,6 +6,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 import torch.distributed as dist
+import multiprocessing as mp
 import inspect
 import time
 import torch
@@ -41,7 +42,7 @@ def write_datafile(filename, tokens_np):
 
 nprocs = max(1, os.cpu_count()//2)
 with mp.Pool(nprocs) as pool:
-    shared_index = 0
+    shard_index = 0
     all_token_np = np.empty((shard_size,), dtype=np.uint16)
     token-count = 0
     progress_bar = None
@@ -51,18 +52,18 @@ with mp.Pool(nprocs) as pool:
             token_count += len(tokens)
 
             if progress_bar is None:
-                progress_bar = tqdm(total=shared_size, unit="okens", desc=f"Shard {shared_index:06d}")
+                progress_bar = tqdm(total=shard_size, unit="okens", desc=f"Shard {shard_index:06d}")
             progress_bar.update_len(tokens)
         else:
-            split = "val" if shared_index == 0 else "train"
-            filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shared_index:06d}")
-            reminder = shared_size - token_count
+            split = "val" if shard_index == 0 else "train"
+            filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
+            reminder = shard_size - token_count
             progress_bar.update(reminder)
-            all_tokens_np[token_count:token_count_reminder] = tokens[:reminder]
+            all_token_np[token_count:token_count+reminder] = tokens[:reminder]
             write_datafile(filename, all_token_np)
             shard_index += 1
             progress_bar = None
-            all_tokens_np[0:len(tokens)-reminder] = tokens[reminder:]
+            all_token_np[0:len(tokens)-reminder] = tokens[reminder:]
             token_count = len(tokens)-reminder
 
     if token_count != 0:
