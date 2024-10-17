@@ -402,6 +402,13 @@ def get_lr(it):
 # optimize:
 optimizer = raw_model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device=device)
 
+# create a log directory we will write checkpoints to and log to
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"log.txt")
+with open(log_file, "w") as f:
+    pass
+
 for step in range(max_steps):
     t0 = time.time()
 
