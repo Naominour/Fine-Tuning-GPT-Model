@@ -201,14 +201,32 @@ class GPT(nn.Module):
         return optimizer
 # --------------------------------------------------------------------------------------
 
-local_dir = "edu_fineweb10B"
-remote_name = "sample-10BT"
+local_dir = "medical_dataset_cache"
+#remote_name = "sample-10BT"
 shard_size = int(1e8)
 
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
-fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train")
+#fw = load_dataset("HuggingFaceFW/fineweb-edu", name=remote_name, split="train")
+#******************************
+def load_medical_data(file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        data = file.readlines()
+    
+    processed_data = []
+    for line in data:
+        if line.startswith("Question:"):
+            qa_pair = line.strip()
+        elif line.startswith("Answer:"):
+            qa_pair += " " + line.strip()
+            processed_data.append({"text": qa_pair})
+    
+    return processed_data
+
+dataset_path = "G:/My Drive/Medical_LLM/output_data/Medical_QA_Dataset.txt"
+medical_dataset = load_medical_data(dataset_path)
+#********************************
 
 # init the tokenizer
 enc = tiktoken.get_encoding("gpt2")
@@ -231,7 +249,7 @@ with mp.Pool(nprocs) as pool:
     all_token_np = np.empty((shard_size,), dtype=np.uint16)
     token-count = 0
     progress_bar = None
-    for tokens in pool.imap(tokenize, fw, chunksize=16):
+    for tokens in pool.imap(tokenize, medical_dataset, chunksize=16):
         if token_count + len(tokens) < shard_size:
             all_token_np[token_count:token_count+len(tokens)] = tokens
             token_count += len(tokens)
@@ -241,7 +259,7 @@ with mp.Pool(nprocs) as pool:
             progress_bar.update_len(tokens)
         else:
             split = "val" if shard_index == 0 else "train"
-            filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
+            filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
             reminder = shard_size - token_count
             progress_bar.update(reminder)
             all_token_np[token_count:token_count+reminder] = tokens[:reminder]
@@ -253,7 +271,7 @@ with mp.Pool(nprocs) as pool:
 
     if token_count != 0:
         split = "val" if shard_index == 0 else "train"
-        filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_index:06d}")
+        filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
         write_datafile(filename, all_token_np[:token_count])
  
 
