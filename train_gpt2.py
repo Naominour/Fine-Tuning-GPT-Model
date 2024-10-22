@@ -201,8 +201,8 @@ class GPT(nn.Module):
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=used_fused)
         return optimizer
 # --------------------------------------------------------------------------------------
+local_dir = "/content/drive/MyDrive/Medical_LLM/output_data/Medical_QA_Dataset.txt"
 
-local_dir = "medical_dataset_cache"
 #remote_name = "sample-10BT"
 shard_size = int(1e8)
 
@@ -294,28 +294,33 @@ class DataLoaderLite:
         self.num_processes = num_processes
         assert split in {'train', 'val'}
 
-        self.dataset = medical_dataset
-        self.current_position = self.process_rank * B * T
+        # Load the entire dataset from the single text file
+        dataset_path = "/content/drive/MyDrive/Medical_LLM/output_data/Medical_QA_Dataset.txt"
+        self.tokens = load_medical_data(dataset_path)  # Adjust this to match your loading function
+        self.current_position = self.B * self.T * self.process_rank
 
-        # Split dataset into training and validation based on split argument
-        if split == 'train':
-            self.tokens = self.dataset  
-        else:  
-            self.tokens = self.dataset  
+        if master_process:
+            print(f"Loaded dataset for split {split}, total tokens: {len(self.tokens)}")
 
-        assert len(self.tokens) > 0, f"No tokens found for split {split}"
+    def reset(self):
+        """Reset the DataLoader to the beginning of the dataset."""
+        self.current_position = self.B * self.T * self.process_rank  # Reset position to the start
 
     def next_batch(self):
         B, T = self.B, self.T
-        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        # Check if there are enough tokens left to fetch a batch
+        if self.current_position + (B * T) >= len(self.tokens):
+            raise StopIteration("No more data available.")
+
+        # Get the current batch
+        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
         x = (buf[:-1]).view(B, T)
         y = (buf[1:]).view(B, T)
         self.current_position += B * T * self.num_processes
-        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
-            #self.current_shard = (self.current_shard + 1) % len(self.shards)
-            #self.tokens = load_tokens(self.shards[self.current_shard])
-            self.current_position = B * T * self.process_rank
+
         return x, y
+
+
 
 # ------------------------------------------------------------------------------------
 # helper function for HellaSwag eval
@@ -414,7 +419,7 @@ def get_lr(it):
     return min_lr + coeff * (max_lr - min_lr)
 
 # optimize:
-optimizer = raw_model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device=device)
+optimizer = raw_model.configurable_optimizer(weight_decay=0.1, learning_rate=6e-4, device_type=device)
 
 # create a log directory we will write checkpoints to and log to
 log_dir = "log"
@@ -422,6 +427,7 @@ os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, f"log.txt")
 with open(log_file, "w") as f:
     pass
+
 
 for step in range(max_steps):
     t0 = time.time()
