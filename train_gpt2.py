@@ -3,8 +3,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2LMHeadModel
 from dataclasses import dataclass
 from torch.nn import functional as F
-from datasets import load_dataset
+#from datasets import load_dataset
 from tqdm import tqdm
+from hellaswag import render_example, iterate_examples
 
 import torch.distributed as dist
 import multiprocessing as mp
@@ -14,7 +15,7 @@ import time
 import torch
 import math
 import torch.nn as nn
-import pandas as np
+import numpy as np
 import os 
 
 #-----------------------------------------------------------
@@ -183,8 +184,8 @@ class GPT(nn.Module):
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
 
         optim_groups =[
-            {'params': decay_params; 'weight_decay': weight_decay},
-            {'params': nodecay_params; 'weight_decay': 0.0}
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
         ]
 
         num_decay_params = sum(p.numel() for p in decay_params)
@@ -197,7 +198,7 @@ class GPT(nn.Module):
         used_fused = fused_available and device_type == "cuda"
         if master_process:        
             print(f"using fused AdamW: {used_fused}")
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=used_fused)
         return optimizer
 # --------------------------------------------------------------------------------------
 
@@ -224,7 +225,7 @@ def load_medical_data(file_path):
     
     return processed_data
 
-dataset_path = "G:/My Drive/Medical_LLM/output_data/Medical_QA_Dataset.txt"
+dataset_path = "/content/drive/MyDrive/Medical_LLM/output_data/Medical_QA_Dataset.txt"
 medical_dataset = load_medical_data(dataset_path)
 #********************************
 
@@ -236,8 +237,8 @@ def tokenize(doc):
     tokens.extend(enc.encode_ordinary(doc["text"]))
     tokens_np = np.array(tokens)
     assert (0 <= tokens_np).all() and (tokens_np < 2**16).all()
-    tokens_np_unit16 = tokens_np.astype(np.unit16)
-    return tokens_np_unit16
+    tokens_np_uint16 = tokens_np.astype(np.uint16)
+    return tokens_np_uint16
 
 def write_datafile(filename, tokens_np):
     with open(filename, "wb") as f:
@@ -247,7 +248,7 @@ nprocs = max(1, os.cpu_count()//2)
 with mp.Pool(nprocs) as pool:
     shard_index = 0
     all_token_np = np.empty((shard_size,), dtype=np.uint16)
-    token-count = 0
+    token_count = 0
     progress_bar = None
     for tokens in pool.imap(tokenize, medical_dataset, chunksize=16):
         if token_count + len(tokens) < shard_size:
@@ -256,7 +257,8 @@ with mp.Pool(nprocs) as pool:
 
             if progress_bar is None:
                 progress_bar = tqdm(total=shard_size, unit="okens", desc=f"Shard {shard_index:06d}")
-            progress_bar.update_len(tokens)
+            progress_bar.update(len(tokens))
+
         else:
             split = "val" if shard_index == 0 else "train"
             filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
@@ -292,23 +294,16 @@ class DataLoaderLite:
         self.num_processes = num_processes
         assert split in {'train', 'val'}
 
+        self.dataset = medical_dataset
+        self.current_position = self.process_rank * B * T
 
-        # get shard filename
-        data_root = "edu_fineweb10B"
-        shards = os.listdir(data_root)
-        shards = [s for s in shards if split in s]
-        shards = sorted(shards)
-        shards = [os.path.join(data_root, s) for s in shards]
-        self.shards = shards
-        assert len(shards) > 0, f"no shards found for split {split}"
-        if master_process:
-            print(f"found {len(shards)} shards for split {split}")
-        self.reset()
+        # Split dataset into training and validation based on split argument
+        if split == 'train':
+            self.tokens = self.dataset  
+        else:  
+            self.tokens = self.dataset  
 
-    def reset(self):
-        self.current_shard = 0
-        self.tokens = load_tokens(self.shards[self.current_shard])
-        self.current_position = self.B * self.T * self.process_rank
+        assert len(self.tokens) > 0, f"No tokens found for split {split}"
 
     def next_batch(self):
         B, T = self.B, self.T
@@ -317,8 +312,8 @@ class DataLoaderLite:
         y = (buf[1:]).view(B, T)
         self.current_position += B * T * self.num_processes
         if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
-            self.current_shard = (self.current_shard + 1) % len(self.shards)
-            self.tokens = load_tokens(self.shards[self.current_shard])
+            #self.current_shard = (self.current_shard + 1) % len(self.shards)
+            #self.tokens = load_tokens(self.shards[self.current_shard])
             self.current_position = B * T * self.process_rank
         return x, y
 
@@ -387,7 +382,6 @@ if master_process:
     print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
 print("I am GPU", ddp_rank)
-import sys; sys.exit(0)
 
 train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="train")
 val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="val")
