@@ -1,11 +1,27 @@
 import os
 import multiprocessing as mp
 import numpy as np
+import pandas as pd
 import tiktoken
 from datasets import load_dataset  # pip install datasets
 from tqdm import tqdm  # pip install tqdm
 
 # ------------------------------------------
+input_data_dir = r"G:\My Drive\Medical_LLM\input_data"
+
+def load_datasets(input_data_dir):
+    dataframes = []
+    for filename in os.listdir(input_data_dir):
+        if filename.endswith('.csv'):
+            filepath = os.path.join(input_data_dir, filename)
+            df = pd.read_csv(filepath)
+            dataframes.append(df)
+            print(f'file append:' + filepath)
+    return pd.concat(dataframes, ignore_index=True)
+
+
+fw = load_datasets(input_data_dir)
+
 local_dir = "medical_dataset_cache"
 shard_size = int(1e8)  # 100M tokens per shard, total of 100 shards
 
@@ -14,7 +30,7 @@ DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
 os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
 # download the dataset
-fw = load_dataset("gamino/wiki_medical_terms")
+# fw = load_dataset("gamino/wiki_medical_terms")
 
 # Initialize the tokenizer outside of the main function
 enc = tiktoken.get_encoding("gpt2")
@@ -22,7 +38,7 @@ eot = enc._special_tokens['<|endoftext|>']  # end of text token
 
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
-    text = doc['page_text']
+    text = f"Q: {doc['Question']} A: {doc['Answer']}"
 
     tokens = [eot]  # the special <|endoftext|> token delimits all documents
     tokens.extend(enc.encode_ordinary(text))
@@ -36,14 +52,8 @@ def write_datafile(filename, tokens_np):
 
 def main():
 
-    train_dataset = fw['train']
-    train_dataset_dict = train_dataset.to_dict() 
-
-    train_dataset_list = [
-        {key: train_dataset_dict[key][i] for key in train_dataset_dict}
-        for i in range(len(train_dataset_dict['page_text']))  # Use an existing column to determine length
-    ]
-
+    print(f"Dataset structure: {fw.info()}")
+    print(f"Dataset shape: {fw.shape}")
     # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
     nprocs = max(1, os.cpu_count() // 2)
     with mp.Pool(nprocs) as pool:
@@ -52,7 +62,7 @@ def main():
         all_tokens_np = np.empty((shard_size,), dtype=np.uint16)
         token_count = 0
         progress_bar = None
-        for tokens in pool.imap(tokenize, train_dataset_list, chunksize=16):
+        for tokens in pool.imap(tokenize, fw.to_dict(orient='records'), chunksize=16):
             # is there enough space in the current shard for the new tokens?
             if token_count + len(tokens) < shard_size:
                 # simply append tokens to current shard
@@ -80,7 +90,7 @@ def main():
         # write any remaining tokens as the last shard
         if token_count != 0:
             split = "val" if shard_index == 0 else "train"
-            filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
+            filename = os.path.join(DATA_CACHE_DIR, f"medical_shard_{split}_{shard_index:06d}")
             write_datafile(filename, all_tokens_np[:token_count])
 
 if __name__ == '__main__':
