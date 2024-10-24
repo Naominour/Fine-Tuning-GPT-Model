@@ -7,7 +7,7 @@ from datasets import load_dataset  # pip install datasets
 from tqdm import tqdm  # pip install tqdm
 
 # ------------------------------------------
-input_data_dir = r"G:\My Drive\Medical_LLM\input_data"
+input_data_dir = r"/content/drive/MyDrive/Medical_LLM/input_data"
 
 def load_datasets(input_data_dir):
     dataframes = []
@@ -22,8 +22,8 @@ def load_datasets(input_data_dir):
 
 fw = load_datasets(input_data_dir)
 
-local_dir = "medical_dataset_cache"
-shard_size = int(1e8)  # 100M tokens per shard, total of 100 shards
+local_dir = "/content/drive/MyDrive/Medical_LLM/medical_dataset_cache"
+shard_size = int(1e3)  # 100M tokens per shard, total of 100 shards
 
 # create the cache the local directory if it doesn't exist yet
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
@@ -90,7 +90,7 @@ def main():
         # write any remaining tokens as the last shard
         if token_count != 0:
             split = "val" if shard_index == 0 else "train"
-            filename = os.path.join(DATA_CACHE_DIR, f"medical_shard_{split}_{shard_index:06d}")
+            filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
             write_datafile(filename, all_tokens_np[:token_count])
 
 if __name__ == '__main__':
