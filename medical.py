@@ -36,12 +36,18 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 enc = tiktoken.get_encoding("gpt2")
 eot = enc._special_tokens['<|endoftext|>']  # end of text token
 
+global_unique_tokens = set()
+
+
 def tokenize(doc):
     # tokenizes a single document and returns a numpy array of uint16 tokens
     text = f"Q: {doc['Question']} A: {doc['Answer']}"
 
     tokens = [eot]  # the special <|endoftext|> token delimits all documents
     tokens.extend(enc.encode_ordinary(text))
+
+    global_unique_tokens.update(tokens)
+
     tokens_np = np.array(tokens)
     assert (0 <= tokens_np).all() and (tokens_np < 2**16).all(), "token dictionary too large for uint16"
     tokens_np_uint16 = tokens_np.astype(np.uint16)
@@ -51,6 +57,8 @@ def write_datafile(filename, tokens_np):
     np.save(filename, tokens_np)
 
 def main():
+
+    global global_unique_tokens
 
     print(f"Dataset structure: {fw.info()}")
     print(f"Dataset shape: {fw.shape}")
@@ -92,6 +100,7 @@ def main():
             split = "val" if shard_index == 0 else "train"
             filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
             write_datafile(filename, all_tokens_np[:token_count])
+    print(f"Final Global Vocabulary Size: {len(global_unique_tokens)}")
 
 if __name__ == '__main__':
     main()
