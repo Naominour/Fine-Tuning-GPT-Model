@@ -74,7 +74,7 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     block_size: int = 1024 # max sequence length
-    vocab_size: int = 22731 # number of tokens: 50,000 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
+    vocab_size: int = 50257 # number of tokens: 50,000 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
     n_layer: int = 6 # number of layers
     n_head: int = 6 # number of heads
     n_embd: int = 384 # embedding dimension
@@ -118,11 +118,6 @@ class GPT(nn.Module):
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
-        print("idx min:", idx.min().item(), "idx max:", idx.max().item())
-        assert idx.max().item() < self.config.vocab_size, "Index exceeds vocabulary size"
-
-        print("tok_emb shape:", tok_emb.shape)
-        print("pos_emb shape:", pos_emb.shape)
         x = tok_emb + pos_emb
         # forward the blocks of the transformer
         for block in self.transformer.h:
@@ -148,7 +143,7 @@ class GPT(nn.Module):
             'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
             'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
         }[model_type]
-        config_args['vocab_size'] = 22731 # always 50257 for GPT model checkpoints
+        config_args['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
         config_args['block_size'] = 1024 # always 1024 for GPT model checkpoints
         # create a from-scratch initialized minGPT model
         config = GPTConfig(**config_args)
@@ -383,7 +378,7 @@ print("data is ready....")
 torch.set_float32_matmul_precision('high')
 
 # create model
-model = GPT(GPTConfig(vocab_size=22731))
+model = GPT(GPTConfig(vocab_size=50257))
 # model = GPT.from_pretrained("gpt2") # or init from OpenAI GPT-2
 model.to(device)
 use_compile = False # torch.compile interferes with HellaSwag eval and Generation. 
@@ -504,37 +499,3 @@ for step in range(max_steps):
 if ddp:
     destroy_process_group()
 
-'''
-    # once in a while evaluate hellaswag
-    if (step % 250 == 0 or last_step) and (not use_compile):
-        num_correct_norm = 0
-        num_total = 0
-        for i, example in enumerate(iterate_examples("val")):
-            # only process examples where i % ddp_world_size == ddp_rank
-            if i % ddp_world_size != ddp_rank:
-                continue
-            # render the example into tokens and labels
-            _, tokens, mask, label = render_example(example)
-            tokens = tokens.to(device)
-            mask = mask.to(device)
-            # get the logits
-            with torch.no_grad():
-                with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                    logits, loss = model(tokens)
-                pred_norm = get_most_likely_row(tokens, mask, logits)
-            num_total += 1
-            num_correct_norm += int(pred_norm == label)
-        # reduce the stats across all processes
-        if ddp:
-            num_total = torch.tensor(num_total, dtype=torch.long, device=device)
-            num_correct_norm = torch.tensor(num_correct_norm, dtype=torch.long, device=device)
-            dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
-            dist.all_reduce(num_correct_norm, op=dist.ReduceOp.SUM)
-            num_total = num_total.item()
-            num_correct_norm = num_correct_norm.item()
-        acc_norm = num_correct_norm / num_total
-        if master_process:
-            print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
-            with open(log_file, "a") as f:
-                f.write(f"{step} hella {acc_norm:.4f}\n")
-'''
