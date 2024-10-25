@@ -16,6 +16,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import GPT2LMHeadModel
 # -----------------------------------------------------------------------------
 
+data_root = "/content/drive/MyDrive/Medical_LLM/medical_dataset_cache"
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -236,44 +238,17 @@ class DataLoaderLite:
 
     def next_batch(self):
         B, T = self.B, self.T
-        required_size = B * T + 1
-        
-        # Check if we need to move to next shard
-        while self.current_position + required_size > len(self.tokens):
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        x = (buf[:-1]).view(B, T) # inputs
+        y = (buf[1:]).view(B, T) # targets
+        # advance the position in the tensor
+        self.current_position += B * T * self.num_processes
+        # if loading the next batch would be out of bounds, advance to next shard
+        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
             self.current_shard = (self.current_shard + 1) % len(self.shards)
             self.tokens = load_tokens(self.shards[self.current_shard])
             self.current_position = B * T * self.process_rank
-            
-        # Ensure we have enough tokens for the batch
-        buf = self.tokens[self.current_position:self.current_position + required_size]
-        
-        # Verify buffer size
-        if len(buf) < required_size:
-            # If we don't have enough tokens, pad with zeros or move to next shard
-            padding_needed = required_size - len(buf)
-            buf = torch.cat([buf, torch.zeros(padding_needed, dtype=buf.dtype)])
-        
-        # Reshape into batch
-        x = buf[:-1].reshape(B, T)  # inputs
-        y = buf[1:].reshape(B, T)   # targets
-        
-        # Advance the position
-        self.current_position += B * T * self.num_processes
-        
         return x, y
-
-    @staticmethod
-    def get_batch_size_info(total_batch_size, B):
-        """
-        Calculate gradient accumulation steps based on total and micro batch sizes
-        """
-        gradient_accumulation_steps = total_batch_size // B
-        if total_batch_size % B != 0:
-            raise ValueError(
-                f"Total batch size ({total_batch_size}) must be divisible by "
-                f"micro batch size ({B})"
-            )
-        return gradient_accumulation_steps
 
 # -----------------------------------------------------------------------------
 # helper function for HellaSwag eval
@@ -299,6 +274,107 @@ def get_most_likely_row(tokens, mask, logits):
     return pred_norm
 
 # -----------------------------------------------------------------------------
+def generate_poem(model, device, device_type, ddp_rank, phrase, num_return_sequences):
+    result = 'result.txt'
+    model.eval()
+    max_length = 32
+    tokens = enc.encode(phrase)
+    tokens = torch.tensor(tokens, dtype=torch.long)
+    tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+    xgen = tokens.to(device)
+    sample_rng = torch.Generator(device=device)
+    sample_rng.manual_seed(42 + ddp_rank)
+
+    generated_poems = []  # List to store generated poems
+
+    while xgen.size(1) < max_length:
+        # forward the model to get the logits
+        with torch.no_grad():
+            with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                logits, loss = model(xgen) # (B, T, vocab_size)
+            # take the logits at the last position
+            logits = logits[:, -1, :] # (B, vocab_size)
+            # get the probabilities
+            probs = F.softmax(logits, dim=-1)
+            # do top-k sampling of 50 (huggingface pipeline default)
+            topk_probs, topk_indices = torch.topk(probs, 50, dim=-1) # return top k high probability
+            # select a token from the top-k probabilities
+            ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
+            # gather the corresponding indices
+            xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+            # append to the sequence
+            xgen = torch.cat((xgen, xcol), dim=1)
+
+    # collect and save the generated text
+    for i in range(num_return_sequences):
+        tokens = xgen[i, :max_length].tolist()
+        decoded = enc.decode(tokens)
+        print(f"rank {ddp_rank} sample {i}: {decoded}")
+        generated_poems.append(decoded)
+
+    # Save the model state (optional)
+    torch.save(model.state_dict(), data_root + '/saved_model.pth')
+
+    # Save the generated poems to a file
+    output_file = data_root + "/" + result
+    with open(output_file, "a") as out_f:
+        for i, poem in enumerate(generated_poems):
+            out_f.write(f"sample {i}: {poem}\n")
+
+    return generated_poems  # Return the list of generated poems
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # run the training loop
 # set up DDP (distributed data parallel).
 # torchrun command sets the env variables RANK, LOCAL_RANK, and WORLD_SIZE
@@ -479,10 +555,10 @@ for step in range(max_steps):
                 # get the probabilities
                 probs = F.softmax(logits, dim=-1)
                 # do top-k sampling of 50 (huggingface pipeline default)
-                # topk_probs here becomes (5, 50), topk_indices is (5, 50)
-                topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+                # topk_probs here becomes (5, 50), opk_indices = torch.topk(probs, 50, dim=-1)
                 # select a token from the top-k probabilities
                 # note: multinomial does not demand the input to sum to 1
+                topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
                 ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
                 # gather the corresponding indices
                 xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
@@ -494,7 +570,7 @@ for step in range(max_steps):
             decoded = enc.decode(tokens)
             print(f"rank {ddp_rank} sample {i}: {decoded}")
 
-    # do one step of the optimization
+    # do one step of the optimizationtopk_indices is (5, 50)
     model.train()
     optimizer.zero_grad()
     loss_accum = 0.0
