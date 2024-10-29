@@ -1,6 +1,7 @@
 import os
 import math
 import time
+import mlflow
 import inspect
 import torch
 import tiktoken
@@ -415,6 +416,16 @@ log_file = os.path.join(log_dir, f"log.txt")
 with open(log_file, "w") as f: # open for writing to clear the file
     pass
 
+mlflow.start_run()
+
+mlflow.log_param("B", B)
+mlflow.log_param("total_batch_size", total_batch_size)
+mlflow.log_param("max_lr", max_lr)
+mlflow.log_param("min_lr", min_lr)
+mlflow.log_param("warmup_steps", warmup_steps)
+mlflow.log_param("max_steps", max_steps)
+
+
 for step in range(max_steps):
     t0 = time.time()
     last_step = (step == max_steps - 1)
@@ -433,10 +444,14 @@ for step in range(max_steps):
                     logits, loss = model(x, y)
                 loss = loss / val_loss_steps
                 val_loss_accum += loss.detach()
+                
         if ddp:
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
             print(f"validation loss: {val_loss_accum.item():.4f}")
+
+            mlflow.log_metric("Validation Loss:", val_loss_accum.item(), step=step)
+
             with open(log_file, "a") as f:
                 f.write(f"{step} val {val_loss_accum.item():.4f}\n")
             if step > 0 and (step % 5000 == 0 or last_step):
@@ -493,8 +508,14 @@ for step in range(max_steps):
     tokens_per_sec = tokens_processed / dt
     if master_process:
         print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+        mlflow.log_metric("Train Loss", loss_accum.item(), step=step)
+
         with open(log_file, "a") as f:
             f.write(f"{step} train {loss_accum.item():.6f}\n")
+
+# Log the final version of the trained model
+mlflow.pytorch.log_model(raw_model, "model")
+mlflow.end_run()
 
 if ddp:
     destroy_process_group()
