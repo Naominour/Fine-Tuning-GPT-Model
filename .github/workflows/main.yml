@@ -1,10 +1,10 @@
-name: Medical LLM CI/CD
+name: Medical LLM Training and Testing
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   build-and-test:
@@ -19,28 +19,10 @@ jobs:
       with:
         python-version: '3.8'
 
-    - name: Cache pip
-      uses: actions/cache@v2
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Build Docker image
-      run: docker build -t medical-llm .
-
-    - name: Run training in Docker
-      run: docker run medical-llm
-
-    - name: Save model artifacts
-      if: success()
-      uses: actions/upload-artifact@v2
-      with:
-        name: model-artifacts
-        path: output/
+    - name: Run tests
+      run: python test_train_gpt2.py
