@@ -278,7 +278,7 @@ def get_most_likely_row(tokens, mask, logits):
 def generate_text(model, device, device_type, ddp_rank, phrase, num_return_sequences):
     result = 'result.txt'
     model.eval()
-    max_length = 32
+    max_length = 64
     tokens = enc.encode(phrase)
     tokens = torch.tensor(tokens, dtype=torch.long)
     tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
@@ -316,11 +316,11 @@ def generate_text(model, device, device_type, ddp_rank, phrase, num_return_seque
     # Save the model state (optional)
     torch.save(model.state_dict(), data_root + '/saved_model.pth')
 
-    # Save the generated poems to a file
+    # Save the generated medical text to a file
     output_file = data_root + "/" + result
     with open(output_file, "a") as out_f:
-        for i, poem in enumerate(generated_text):
-            out_f.write(f"sample {i}: {poem}\n")
+        for i, med in enumerate(generated_text):
+            out_f.write(f"sample {i}: {med}\n")
 
     return generated_text  # Return the list of generated poems
 
@@ -363,7 +363,7 @@ if torch.cuda.is_available():
 enc = tiktoken.get_encoding("gpt2")
 
 total_batch_size = 16384 # 2**19, ~0.5M, in number of tokens
-B = 32 # micro batch size
+B = 16 # micro batch size
 T = 1024 # sequence length
 assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
