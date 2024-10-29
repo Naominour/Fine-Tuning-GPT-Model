@@ -2,7 +2,7 @@ import torch
 
 def test_model():
     # Define the log file path
-    log_dir = "G:\My Drive\Medical_LLM\log.txt"
+    log_dir = "log.txt"
     
     # Open the log file and read the last line
     with open(log_dir, 'r') as file:
