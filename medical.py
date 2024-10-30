@@ -1,122 +1,186 @@
-
-import os
-import multiprocessing as mp
-import numpy as np
-import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import tiktoken
-from datasets import load_dataset  # pip install datasets
-from tqdm import tqdm  # pip install tqdm
+import streamlit as st
 
-# ------------------------------------------
-input_data_dir = r"/content/drive/MyDrive/Medical_LLM/input_data"
-global_unique_tokens = set()
+class CausalSelfAttention(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT = 1
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+
+    def forward(self, x):
+        B, T, C = x.size() 
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        # output projection
+        y = self.c_proj(y)
+        return y
+
+class MLP(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd)
+        self.gelu    = nn.GELU(approximate='tanh')
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT = 1
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        return x
+
+class Block(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+class GPTConfig:
+    block_size: int = 1024 # max sequence length
+    vocab_size: int = 50257 # number of tokens: 50,000 BPE merges + 256 bytes tokens + 1 <|endoftext|> token
+    n_layer: int = 12 # number of layers
+    n_head: int = 12 # number of heads
+    n_embd: int = 768 # embedding dimension
 
 
-def load_datasets(input_data_dir):
-    dataframes = []
-    for filename in os.listdir(input_data_dir):
-        if filename.endswith('.csv'):
-            filepath = os.path.join(input_data_dir, filename)
-            df = pd.read_csv(filepath)
-            dataframes.append(df)
-            print(f'file append:' + filepath)
-    return pd.concat(dataframes, ignore_index=True)
+class GPT(nn.Module):
 
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
 
-fw = load_datasets(input_data_dir)
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = nn.LayerNorm(config.n_embd),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-local_dir = "/content/drive/MyDrive/Medical_LLM/medical_dataset_cache"
-shard_size = int(1e6)  # 100M tokens per shard, total of 100 shards
+        # weight sharing scheme
+        self.transformer.wte.weight = self.lm_head.weight
 
-# create the cache the local directory if it doesn't exist yet
-DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
-os.makedirs(DATA_CACHE_DIR, exist_ok=True)
+        # init params
+        self.apply(self._init_weights)
 
-# download the dataset
-# fw = load_dataset("gamino/wiki_medical_terms")
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-# Initialize the tokenizer outside of the main function
+    def forward(self, idx, targets=None):
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and posisition embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x) # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+
+@st.cache_resource
+def load_model():
+    config = GPTConfig()
+    model = GPT(config)
+    model.load_state_dict(torch.load("G:/My Drive/Medical_LLM/medical_dataset_cache/saved_model.pth", map_location=torch.device('cpu'), weights_only=True))
+    model.eval()  # Set the model to evaluation mode
+    return model
+
+# Initialize tokenizer
 enc = tiktoken.get_encoding("gpt2")
-eot = enc.encode("<|endoftext|>", allowed_special={'<|endoftext|>'})[0] # end of text token
-global_unique_tokens = set()
+eot = enc.encode("<|endoftext|>", allowed_special={'<|endoftext|>'})[0]
 
-max_valid_token_id = 22730
-replacement_token_id = eot
+# Function to generate text based on input
+def generate_text(model, input_text, max_tokens=100, temperature=0.7):
+    # Tokenize input
+    input_ids = enc.encode(input_text)
+    input_ids = torch.tensor(input_ids).unsqueeze(0)  # Add batch dimension
+    
+    generated_tokens = []
+    
+    with torch.no_grad():
+        for _ in range(max_tokens):
+            # Get model predictions
+            outputs = model(input_ids)
+            next_token_logits = outputs[0, -1, :] / temperature
+            
+            # Apply softmax to get probabilities
+            probs = F.softmax(next_token_logits, dim=-1)
+            
+            # Sample from the distribution
+            next_token = torch.multinomial(probs, num_samples=1)
+            
+            # Break if we generate EOT token
+            if next_token.item() == eot:
+                break
+                
+            # Append to generated tokens
+            generated_tokens.append(next_token.item())
+            
+            # Update input_ids with the new token
+            input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+    
+    # Decode generated tokens
+    generated_text = enc.decode(generated_tokens)
+    return input_text + generated_text
 
-def tokenize(doc):
-    # tokenizes a single document and returns a numpy array of uint16 tokens
-    text = f"Q: {doc['Question']} A: {doc['Answer']}"
+# Streamlit Interface
+st.title("Medical Text Generation Model")
+st.write("Enter the beginning of a sentence, and the model will generate a continuation.")
 
-    tokens = [eot]  # the special <|endoftext|> token delimits all documents
-    tokens.extend(enc.encode_ordinary(text))
-    tokens_np = np.array(tokens)
-    assert (0 <= tokens_np).all() and (tokens_np < 2**16).all(), "token dictionary too large for uint16"
-    tokens_np_uint16 = tokens_np.astype(np.uint16)
-    return tokens_np_uint16, set(tokens)
+# Add temperature slider
+temperature = st.slider("Temperature (higher = more creative, lower = more focused)", 0.1, 1.0, 0.7, 0.1)
 
-def write_datafile(filename, tokens_np):
-    np.save(filename, tokens_np)
+# Add max tokens slider
+max_tokens = st.slider("Maximum tokens to generate", 10, 500, 100, 10)
 
-def main():
-    global global_unique_tokens
+# Use st.text_input for user to enter their own sentence
+input_text = st.text_input("Input text:", "")
 
-    print(f"Dataset structure: {fw.info()}")
-    print(f"Dataset shape: {fw.shape}")
-    print(f"Final Global Vocabulary Size: {len(global_unique_tokens)}")
-
-    # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
-    nprocs = max(1, os.cpu_count() // 2)
-    with mp.Pool(nprocs) as pool:
-        shard_index = 0
-        # preallocate buffer to hold current shard
-        all_tokens_np = np.empty((shard_size,), dtype=np.uint16)
-        token_count = 0
-        progress_bar = None
-        for tokens, unique_tokens in pool.imap(tokenize, fw.to_dict(orient='records'), chunksize=16):
-            global_unique_tokens.update(unique_tokens)
-            # is there enough space in the current shard for the new tokens?
-            if token_count + len(tokens) < shard_size:
-                # simply append tokens to current shard
-                all_tokens_np[token_count:token_count + len(tokens)] = tokens
-                token_count += len(tokens)
-                # update progress bar
-                if progress_bar is None:
-                    progress_bar = tqdm(total=shard_size, unit="tokens", desc=f"Shard {shard_index}")
-                progress_bar.update(len(tokens))
-            else:
-                # write the current shard and start a new one
-                split = "val" if shard_index == 0 else "train"
-                filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
-                # split the document into whatever fits in this shard; the remainder goes to next one
-                remainder = shard_size - token_count
-                progress_bar.update(remainder)
-                all_tokens_np[token_count:token_count + remainder] = tokens[:remainder]
-                write_datafile(filename, all_tokens_np)
-                shard_index += 1
-                progress_bar = None
-                # populate the next shard with the leftovers of the current doc
-                all_tokens_np[0:len(tokens) - remainder] = tokens[remainder:]
-                token_count = len(tokens) - remainder
-
-        # write any remaining tokens as the last shard
-        if token_count != 0:
-            split = "val" if shard_index == 0 else "train"
-            filename = os.path.join(DATA_CACHE_DIR, f"medical_{split}_{shard_index:06d}")
-            write_datafile(filename, all_tokens_np[:token_count])
-    # Adjust each shard by replacing tokens that exceed max_valid_token_id
-    for shard_filename in os.listdir(local_dir):
-        if shard_filename.endswith('.npy'):
-            shard_path = os.path.join(local_dir, shard_filename)
-            tokens = np.load(shard_path)
-
-            # Replace tokens exceeding max_valid_token_id
-            tokens = np.where(tokens > max_valid_token_id, replacement_token_id, tokens)
-            np.save(shard_path, tokens)
-
-    print("Completed replacing tokens exceeding max vocabulary size.")
-
-    vocab_size = len(global_unique_tokens)
-    print(f"Final Global Vocabulary Size: {vocab_size}")
-
-if __name__ == '__main__':
-    main()
+# Generate text when the button is clicked
+if st.button("Generate"):
+    if input_text:  # Ensure input_text is not empty
+        with st.spinner("Generating..."):
+            generated_text = generate_text(model, input_text, max_tokens=max_tokens, temperature=temperature)
+        st.write("Generated Text:")
+        st.write(generated_text)
+    else:
+        st.write("Please enter some text to begin generation.")
