@@ -162,27 +162,3 @@ def generate_text(model, input_text, max_tokens=100, temperature=0.7):
     generated_text = enc.decode(generated_tokens)
     return input_text + generated_text
 
-# Streamlit Interface
-st.title("Medical Text Generation Model")
-st.write("Enter the beginning of a sentence, and the model will generate a continuation.")
-
-model = load_model()
-
-# Add temperature slider
-temperature = st.slider("Temperature (higher = more creative, lower = more focused)", 0.1, 1.0, 0.7, 0.1)
-
-# Add max tokens slider
-max_tokens = st.slider("Maximum tokens to generate", 10, 500, 100, 10)
-
-# Use st.text_input for user to enter their own sentence
-input_text = st.text_input("Ask your question:", "")
-
-# Generate text when the button is clicked
-if st.button("Generate"):
-    if input_text:  # Ensure input_text is not empty
-        with st.spinner("Generating..."):
-            generated_text = generate_text(model, input_text, max_tokens=max_tokens, temperature=temperature)
-        st.write("Generated Text:")
-        st.write(generated_text)
-    else:
-        st.write("Please ask your question.")
