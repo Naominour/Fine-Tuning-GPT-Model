@@ -1,2 +1,4 @@
 medical_dataset_cache/
 input_data/
+mlruns/
+__pycache__/
