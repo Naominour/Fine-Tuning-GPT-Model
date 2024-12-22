@@ -76,36 +76,18 @@ python train_gpt2.py
 ```
 Adjust hyperparameters in the script as needed.
 Monitor training progress via MLflow or logs in the log directory.
-2. Test the Model
+**2. Test the Model**
 ```
 python test.py
 ```
 Ensures the final training loss is below the specified threshold.
-3. Start the Application
-bash
-Copy code
+
+**3. Start the Application**
+```
 python app.py
+```
 Access the web interface at http://localhost:5000 in your browser.
-4. Use the Web Interface
+
+**4. Use the Web Interface**
 Enter a medical text prompt in the input box.
 Click "Generate" to see the model's completion.
-Reproducing Results
-Data Preparation
-Ensure the dataset is tokenized and saved in .npy format in the medical_dataset_cache directory.
-Model Training
-Use the same hyperparameters and seeds as defined in train_gpt2.py for reproducibility.
-Model Testing
-Validate the model using the loss threshold specified in test.py.
-Deployment
-Load the trained model in app.py and ensure the required files are in place.
-Contributing
-We welcome contributions to improve the project! Follow these steps to contribute:
-
-Fork the repository.
-Create a feature branch:
-bash
-Copy code
-git checkout -b feature-branch
-Commit your changes and push them to your forked repository.
-Submit a pull request for review.
-For any questions or issues, feel free to open an issue in the repository.
