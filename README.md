@@ -15,7 +15,9 @@ This project creates a language model that generates medical text. It has three 
 This project **fine-tunes a GPT-based language model on a medical dataset** to generate contextually accurate medical text. The key features include:
 
 ◉ Training from scratch or using a pre-trained GPT-2 model.
+
 ◉ A validation pipeline to monitor training loss.
+
 ◉ A web-based interface for generating medical text completions based on user input.
 
 ## Architecture Diagram
