@@ -49,3 +49,63 @@ This project **fine-tunes a GPT-based language model on a medical dataset** to g
 - Hosts the model as a **REST API** using Flask.
 - Includes a simple and intuitive web interface for text prompt input.
 - Generates and displays medical text completions in real-time.
+
+## Installation and Setup
+**Prerequisites**
+• Python 3.8+
+• GPU with CUDA (optional but recommended)
+• Libraries: torch, transformers, flask, mlflow, tiktoken, etc.
+
+**Setup Instructions**
+Clone the repository:
+```
+git clone https://github.com/your-repo/medical-text-generator.git
+cd medical-text-generator
+```
+Install dependencies:
+```
+pip install -r requirements.txt
+```
+
+Download or prepare the medical dataset and place it in the medical_dataset_cache directory.
+
+## How to Run the Project
+**1. Train the Model**
+```
+python train_gpt2.py
+```
+Adjust hyperparameters in the script as needed.
+Monitor training progress via MLflow or logs in the log directory.
+2. Test the Model
+```
+python test.py
+```
+Ensures the final training loss is below the specified threshold.
+3. Start the Application
+bash
+Copy code
+python app.py
+Access the web interface at http://localhost:5000 in your browser.
+4. Use the Web Interface
+Enter a medical text prompt in the input box.
+Click "Generate" to see the model's completion.
+Reproducing Results
+Data Preparation
+Ensure the dataset is tokenized and saved in .npy format in the medical_dataset_cache directory.
+Model Training
+Use the same hyperparameters and seeds as defined in train_gpt2.py for reproducibility.
+Model Testing
+Validate the model using the loss threshold specified in test.py.
+Deployment
+Load the trained model in app.py and ensure the required files are in place.
+Contributing
+We welcome contributions to improve the project! Follow these steps to contribute:
+
+Fork the repository.
+Create a feature branch:
+bash
+Copy code
+git checkout -b feature-branch
+Commit your changes and push them to your forked repository.
+Submit a pull request for review.
+For any questions or issues, feel free to open an issue in the repository.
