@@ -112,26 +112,26 @@ class GPT(nn.Module):
             wte = nn.Embedding(config.vocab_size, config.n_embd), # Token embeddings
             wpe = nn.Embedding(config.block_size, config.n_embd), # Positional embeddings
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), # Stack of transformer blocks
-            ln_f = nn.LayerNorm(config.n_embd), # Final layer normalisation
+            ln_f = nn.LayerNorm(config.n_embd), # Final layer normalization
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False) # Output layer (logits)
 
         # Weight tying between input embedding and output layer
         self.transformer.wte.weight = self.lm_head.weight
 
-        # Initialise model parameters
+        # Initialize model parameters
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             std = 0.02
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
-                std *= (2 * self.config.n_layer) ** -0.5 # Scale initialisation for deeper layers
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std) # Initialise weights with normal distribution
+                std *= (2 * self.config.n_layer) ** -0.5 # Scale initialization for deeper layers
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std) # Initialize weights with normal distribution
             if module.bias is not None:
-                torch.nn.init.zeros_(module.bias) # Initialise biases to zero
+                torch.nn.init.zeros_(module.bias) # Initialize biases to zero
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02) # Initialise embedding weights
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02) # Initialize embedding weights
 
     def forward(self, idx, targets=None):
         # idx is of shape (B, T)
@@ -146,7 +146,7 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             x = block(x)
             
-        # Final layer normalisation and output projection
+        # Final layer normalization and output projection
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # Compute logits for vocabulary (B, T, vocab_size)
         loss = None
