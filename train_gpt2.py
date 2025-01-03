@@ -406,30 +406,34 @@ min_lr = max_lr * 0.1
 warmup_steps = 715
 max_steps = 19073 # Total number of steps for training (~1 epoch for 10B tokens and batch size 0.5M)
 def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
+    # Calculates the learning rate for the current training step.
+    # 1) Linear warmup for the first `warmup_steps`
     if it < warmup_steps:
         return max_lr * (it+1) / warmup_steps
-    # 2) if it > lr_decay_iters, return min learning rate
+    # 2) If the step exceeds the maximum steps, use the minimum learning rate
     if it > max_steps:
         return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    # 3) Apply cosine decay between `warmup_steps` and `max_steps`
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps) # Ratio of progress after warmup
     assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
-    return min_lr + coeff * (max_lr - min_lr)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # Cosine decay coefficient
+    return min_lr + coeff * (max_lr - min_lr) # Interpolated learning rate
 
-# optimize!
+# Initialize the optimizer
 optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device_type)
 
-# create the log directory we will write checkpoints to and log to
+# Create the directory for logging and saving checkpoints
 log_dir = data_root + "/log"
 os.makedirs(log_dir, exist_ok=True)
+# Create and initialize the log file
 log_file = os.path.join(log_dir, f"log.txt")
 with open(log_file, "w") as f: # open for writing to clear the file
     pass
-
+    
+# Start an MLflow run for logging parameters and metrics
 mlflow.start_run()
 
+# Log training parameters to MLflow
 mlflow.log_param("B", B)
 mlflow.log_param("total_batch_size", total_batch_size)
 mlflow.log_param("max_lr", max_lr)
@@ -437,12 +441,12 @@ mlflow.log_param("min_lr", min_lr)
 mlflow.log_param("warmup_steps", warmup_steps)
 mlflow.log_param("max_steps", max_steps)
 
-
+# Training loop
 for step in range(max_steps):
-    t0 = time.time()
-    last_step = (step == max_steps - 1)
+    t0 = time.time() # Start time for step
+    last_step = (step == max_steps - 1) # Check if this is the last training step
 
-    # once in a while evaluate our validation loss
+    # Evaluate validation loss every 250 steps or on the last step
     if step % 250 == 0 or last_step:
         model.eval()
         val_loader.reset()
@@ -454,18 +458,22 @@ for step in range(max_steps):
                 x, y = x.to(device), y.to(device)
                 with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
                     logits, loss = model(x, y)
-                loss = loss / val_loss_steps
+                loss = loss / val_loss_steps # Normalize loss over validation steps
                 val_loss_accum += loss.detach()
                 
+        # Aggregate validation loss across processes in DDP
         if ddp:
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
+            # Log and print validation loss
             print(f"validation loss: {val_loss_accum.item():.4f}")
 
             mlflow.log_metric("Validation Loss:", val_loss_accum.item(), step=step)
 
             with open(log_file, "a") as f:
                 f.write(f"{step} val {val_loss_accum.item():.4f}\n")
+                
+            # Save checkpoints at regular intervals or on the last step
             if step > 0 and (step % 5000 == 0 or last_step):
                 # optionally write model checkpoints
                 checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
@@ -475,11 +483,9 @@ for step in range(max_steps):
                     'step': step,
                     'val_loss': val_loss_accum.item()
                 }
-                # you might also want to add optimizer.state_dict() and
-                # rng seeds etc., if you wanted to more exactly resume training
                 torch.save(checkpoint, checkpoint_path)
 
-    # once in a while generate from the model (except step 0, which is noise)
+    # Generate text samples at regular intervals or on the last step
     if ((step > 0 and step % 250 == 0) or last_step) and (not use_compile):
         phrase = "Smoking is the major risk factor for"
         generate_text(model, device, device_type, ddp_rank, phrase, 4)
@@ -492,28 +498,33 @@ for step in range(max_steps):
         print(f"step {micro_step} of training")
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
-        # added after video, this field is also used by the forward pass.
+        
         if ddp:
             model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
+            
+        # Compute logits and loss
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
             logits, loss = model(x, y)
-        # we have to scale the loss to account for gradient accumulation,
-        # because the gradients just add on each successive backward().
-        # addition of gradients corresponds to a SUM in the objective, but
-        # instead of a SUM we want MEAN. Scale the loss here so it comes out right
-        loss = loss / grad_accum_steps
-        loss_accum += loss.detach()
-        loss.backward()
+        loss = loss / grad_accum_steps # Scale loss for gradient accumulation
+        loss_accum += loss.detach() # Accumulate the scaled loss
+        loss.backward() # Backpropagate
+
+    # Aggregate training loss across processes in DDP
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
+
+    # Clip gradients to avoid exploding gradients
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    # determine and set the learning rate for this iteration
+    # Update learning rate for the current step
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-    optimizer.step()
+    optimizer.step() # Perform optimization step
+    
+    # Synchronize CUDA device to ensure all computations are complete
     if device_type == "cuda":
-        torch.cuda.synchronize() # wait for the GPU to finish work
+        torch.cuda.synchronize() 
+    # Log training metrics
     t1 = time.time()
     dt = t1 - t0 # time difference in seconds
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
@@ -522,10 +533,11 @@ for step in range(max_steps):
         print(f"step {step:5d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
         mlflow.log_metric("Train Loss", loss_accum.item(), step=step)
 
+        # Save training loss to log file
         with open(log_file, "a") as f:
             f.write(f"{step} train {loss_accum.item():.6f}\n")
 
-# Log the final version of the trained model
+# Save the final trained model to MLflow
 mlflow.pytorch.log_model(raw_model, "model")
 mlflow.end_run()
 
