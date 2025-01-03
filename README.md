@@ -8,13 +8,13 @@ This project creates a language model that generates medical text. It has three 
 ![Generative AI](https://img.shields.io/badge/Skill-Generative%20AI-yellow)
 ![GPT](https://img.shields.io/badge/Skill-GPT-green)
 ![LLaMA](https://img.shields.io/badge/Skill-GPT-blue)
-![Fine Tuning Pretrained Models](https://img.shields.io/badge/Skill-Fine%20Tuning%20Pretrained%20Models-orange)
+![Fine Tuning Pretrained Models](https://img.shields.io/badge/Skill-Fine%20Tuning%20Pretrained%20Models-red)
 ![Model Deployment](https://img.shields.io/badge/Skill-Model%20Deployment-purpule)
 ![Tokenization](https://img.shields.io/badge/Skill-Tokenization-blue)
 ![Experiment Tracking Mlflow](https://img.shields.io/badge/Skill-Experiment%20Tracking%20Mlflow-yellow)
 ![Data Augmentation](https://img.shields.io/badge/Skill-Data%20Augmentation-red)
 ![Version Control](https://img.shields.io/badge/Skill-Version%20Control-white)
-![High Performance Computing](https://img.shields.io/badge/Skill-High%20Performance%20Computing-orange)
+![High Performance Computing](https://img.shields.io/badge/Skill-High%20Performance%20Computing-pink)
 ![Python Programming](https://img.shields.io/badge/Skill-Python%20Programming-blue)
 
 ## Table of Contents
